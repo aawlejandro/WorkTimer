@@ -4,18 +4,23 @@ import SwiftData
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
 
-    // Fetch today's sessions, newest first.
-    @Query(
-        filter: #Predicate<WorkSession> { session in
-            session.completedAt >= Calendar.current.startOfDay(for: .now)
-        },
-        sort: \WorkSession.completedAt,
-        order: .reverse
-    )
-    private var todaySessions: [WorkSession]
+    // @Query filter must capture a plain value — Calendar calls inside
+    // #Predicate cannot be compiled to SQLite, so we compute startOfDay here.
+    @Query private var todaySessions: [WorkSession]
 
     @State private var vm = TimerViewModel()
     @State private var showCompletedBanner = false
+
+    init() {
+        let startOfDay = Calendar.current.startOfDay(for: .now)
+        _todaySessions = Query(
+            filter: #Predicate<WorkSession> { session in
+                session.completedAt >= startOfDay
+            },
+            sort: \WorkSession.completedAt,
+            order: .reverse
+        )
+    }
 
     var body: some View {
         NavigationStack {
