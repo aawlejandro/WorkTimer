@@ -20,6 +20,47 @@ Swift Playgrounds en iPadOS. Por tanto:
 - Sin xcodebuild ni scripts de build
 - Todo el proyecto debe funcionar como un único .swiftpm válido
 
+## Package.swift — Reglas críticas para Swift Playgrounds
+Swift Playgrounds requiere `import AppleProductTypes` y un producto
+`.iOSApplication(...)` explícito. Sin esto, Playgrounds muestra
+"no se ha encontrado ningún destino ejecutable" aunque el target exista.
+
+El Package.swift DEBE tener esta estructura:
+```swift
+import PackageDescription
+import AppleProductTypes          // exclusivo de Swift Playgrounds
+
+let package = Package(
+    products: [
+        .iOSApplication(
+            name: "WorkTimer",
+            targets: ["AppModule"],
+            bundleIdentifier: "com.alejandro.WorkTimer",
+            ...
+        )
+    ],
+    targets: [
+        .executableTarget(name: "AppModule", path: "Sources/AppModule")
+    ]
+)
+```
+
+Este Package.swift NO compilará en Xcode estándar — es intencional.
+
+## Estructura de carpetas
+```
+WorkTimer.swiftpm/
+├── Package.swift
+└── Sources/
+    └── AppModule/
+        ├── WorkTimerApp.swift   ← único @main
+        ├── ContentView.swift
+        ├── TimerViewModel.swift
+        └── WorkSession.swift
+```
+Los archivos Swift van TODOS dentro de `Sources/AppModule/`.
+No poner archivos .swift en la raíz del .swiftpm.
+
 ## Scope v1
 - Pantalla principal: configurar duración (libre) + etiqueta de tarea
 - Timer con estados: idle → corriendo → pausado → completado
