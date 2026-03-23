@@ -7,7 +7,6 @@ struct WorkTimerApp: App {
         WindowGroup {
             ContentView()
         }
-        // SwiftData container — schema is inferred from WorkSession model.
         .modelContainer(for: WorkSession.self)
     }
 }
