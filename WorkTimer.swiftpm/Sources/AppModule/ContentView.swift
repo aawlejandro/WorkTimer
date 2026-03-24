@@ -125,7 +125,6 @@ struct ContentView: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
-            .disabled(vm.taskLabel.trimmingCharacters(in: .whitespaces).isEmpty)
 
         case .running:
             HStack(spacing: 16) {
