@@ -15,8 +15,11 @@ final class WorkSession {
         self.completedAt = completedAt
     }
 
-    // Human-readable duration, e.g. "25 min" or "1 h 5 min"
+    // Human-readable duration, e.g. "45 s", "25 min" or "1 h 5 min"
     var formattedDuration: String {
+        if durationSeconds < 60 {
+            return "\(durationSeconds) s"
+        }
         let minutes = durationSeconds / 60
         let hours = minutes / 60
         let remainingMinutes = minutes % 60
