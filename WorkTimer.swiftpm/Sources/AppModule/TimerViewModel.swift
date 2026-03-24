@@ -27,9 +27,13 @@ final class TimerViewModel {
     /// Seconds remaining in the current run.
     var secondsRemaining: Int = 0
 
+    // Set to true when the timer reaches zero on its own.
+    // ContentView observes this to persist the session.
+    var didAutoComplete: Bool = false
+
     // Total seconds when the timer was started — needed to compute elapsed time on save.
     private var totalSeconds: Int = 0
-    private var timer: Timer?
+    private var timerTask: Task<Void, Never>?
 
     // MARK: - Derived display helpers
 
@@ -57,7 +61,8 @@ final class TimerViewModel {
     func pause() {
         guard state == .running else { return }
         state = .paused
-        timer?.invalidate()
+        timerTask?.cancel()
+        timerTask = nil
     }
 
     func resume() {
@@ -67,7 +72,8 @@ final class TimerViewModel {
     }
 
     func reset() {
-        timer?.invalidate()
+        timerTask?.cancel()
+        timerTask = nil
         state = .idle
         secondsRemaining = 0
         totalSeconds = 0
@@ -75,7 +81,8 @@ final class TimerViewModel {
 
     // Returns the elapsed seconds so the caller can persist a WorkSession.
     func complete() -> Int {
-        timer?.invalidate()
+        timerTask?.cancel()
+        timerTask = nil
         state = .completed
         let elapsed = totalSeconds - secondsRemaining
         return elapsed > 0 ? elapsed : totalSeconds
@@ -83,16 +90,19 @@ final class TimerViewModel {
 
     // MARK: - Private
 
+    // Async loop that ticks every second on MainActor — no Sendable issues.
     private func scheduleTimer() {
-        timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-            guard let self else { return }
-            Task { @MainActor in
+        timerTask?.cancel()
+        timerTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1))
+                guard !Task.isCancelled, let self else { return }
                 if self.secondsRemaining > 0 {
                     self.secondsRemaining -= 1
-                } else {
-                    // Timer reached zero — auto-complete.
-                    _ = self.complete()
+                    if self.secondsRemaining == 0 {
+                        _ = self.complete()
+                        self.didAutoComplete = true
+                    }
                 }
             }
         }
