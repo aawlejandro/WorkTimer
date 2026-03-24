@@ -4,46 +4,49 @@ import SwiftData
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
 
-    // Fetch all sessions — we filter by today in the computed property
-    // so the view stays correct even if the app crosses midnight.
-    @Query(sort: \WorkSession.completedAt, order: .reverse)
-    private var allSessions: [WorkSession]
+    // Query with predicate — SwiftData notifies the view when the store changes.
+    @Query private var todaySessions: [WorkSession]
 
     @State private var vm = TimerViewModel()
     @State private var showCompletedBanner = false
     @State private var bannerTask: Task<Void, Never>?
-    @FocusState private var isTextFieldFocused: Bool
 
-    // Local text state — avoids binding through @MainActor @Observable
-    // which can drop keystrokes from external keyboards on iPad.
+    // Local text state — a plain @State string is the most reliable
+    // binding for TextField across all keyboard types (on-screen,
+    // external, dictation).
     @State private var taskText = ""
 
-    // Filter sessions to today only, recalculated on every body evaluation.
-    private var todaySessions: [WorkSession] {
+    init() {
         let startOfDay = Calendar.current.startOfDay(for: .now)
-        return allSessions.filter { $0.completedAt >= startOfDay }
+        _todaySessions = Query(
+            filter: #Predicate<WorkSession> { session in
+                session.completedAt >= startOfDay
+            },
+            sort: \WorkSession.completedAt,
+            order: .reverse
+        )
     }
 
     var body: some View {
         NavigationStack {
             ScrollViewReader { proxy in
-                ScrollView {
-                    VStack(spacing: 32) {
-                        timerSection
-                        historySection
-                            .id("history")
-                    }
-                    .padding()
+                List {
+                    timerSection
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: 16, leading: 16, bottom: 0, trailing: 16))
+                        .listRowBackground(Color.clear)
+
+                    historySection
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: 16, leading: 16, bottom: 16, trailing: 16))
+                        .listRowBackground(Color.clear)
+                        .id("history")
                 }
-                .scrollDismissesKeyboard(.interactively)
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                .scrollDismissesKeyboard(.immediately)
                 .navigationTitle("Work Timer")
                 .navigationBarTitleDisplayMode(.large)
-                .toolbar {
-                    ToolbarItemGroup(placement: .keyboard) {
-                        Spacer()
-                        Button("Done") { isTextFieldFocused = false }
-                    }
-                }
                 .onChange(of: vm.didAutoComplete) { _, didComplete in
                     guard didComplete else { return }
                     vm.didAutoComplete = false
@@ -60,18 +63,13 @@ struct ContentView: View {
 
     private var timerSection: some View {
         VStack(spacing: 24) {
-            // Task label — local @State avoids binding issues with
-            // external keyboards that go through @MainActor @Observable.
+            // Task label — plain @State binding works reliably with every
+            // input method: on-screen keyboard, external keyboard, dictation.
             TextField("What are you working on?", text: $taskText)
                 .font(.title3)
                 .multilineTextAlignment(.center)
-                .textInputAutocapitalization(.sentences)
-                .autocorrectionDisabled(false)
-                .submitLabel(.done)
-                .focused($isTextFieldFocused)
                 .disabled(vm.state != .idle)
                 .padding(.horizontal)
-                .onSubmit { isTextFieldFocused = false }
 
             // Duration picker — only when idle.
             if vm.state == .idle {
@@ -97,7 +95,6 @@ struct ContentView: View {
                          ? String(format: "%02d:00", vm.selectedMinutes)
                          : vm.displayTime)
                         .font(.system(size: 56, weight: .thin, design: .monospaced))
-                        .contentTransition(.numericText())
                     if vm.state != .idle {
                         Text(stateLabel)
                             .font(.caption)
@@ -141,10 +138,7 @@ struct ContentView: View {
     private var controlButtons: some View {
         switch vm.state {
         case .idle:
-            Button(action: {
-                isTextFieldFocused = false
-                vm.start()
-            }) {
+            Button(action: { vm.start() }) {
                 Label("Start", systemImage: "play.fill")
                     .frame(maxWidth: .infinity)
             }
@@ -221,12 +215,9 @@ struct ContentView: View {
                     .padding(.vertical, 24)
             } else {
                 ForEach(todaySessions) { session in
-                    SessionRow(session: session) {
-                        withAnimation {
-                            modelContext.delete(session)
-                        }
-                    }
+                    SessionRow(session: session)
                 }
+                .onDelete(perform: deleteSessions)
             }
         }
         .padding()
@@ -280,6 +271,8 @@ struct ContentView: View {
             durationSeconds: elapsed
         )
         modelContext.insert(session)
+        // Flush to the persistent store so @Query picks up the change immediately.
+        try? modelContext.save()
 
         bannerTask?.cancel()
         withAnimation {
@@ -293,6 +286,13 @@ struct ContentView: View {
         }
     }
 
+    private func deleteSessions(at offsets: IndexSet) {
+        for index in offsets {
+            modelContext.delete(todaySessions[index])
+        }
+        try? modelContext.save()
+    }
+
     private func resetToIdle() {
         vm.reset()
         taskText = ""
@@ -303,7 +303,6 @@ struct ContentView: View {
 
 private struct SessionRow: View {
     let session: WorkSession
-    let onDelete: () -> Void
 
     private static let timeFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -328,10 +327,5 @@ private struct SessionRow: View {
         .padding(.vertical, 8)
         .padding(.horizontal, 12)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-        .contextMenu {
-            Button(role: .destructive, action: onDelete) {
-                Label("Delete", systemImage: "trash")
-            }
-        }
     }
 }
