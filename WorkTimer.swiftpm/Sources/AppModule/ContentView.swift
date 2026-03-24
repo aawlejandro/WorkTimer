@@ -14,6 +14,10 @@ struct ContentView: View {
     @State private var bannerTask: Task<Void, Never>?
     @FocusState private var isTextFieldFocused: Bool
 
+    // Local text state — avoids binding through @MainActor @Observable
+    // which can drop keystrokes from external keyboards on iPad.
+    @State private var taskText = ""
+
     // Filter sessions to today only, recalculated on every body evaluation.
     private var todaySessions: [WorkSession] {
         let startOfDay = Calendar.current.startOfDay(for: .now)
@@ -22,32 +26,32 @@ struct ContentView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(spacing: 32) {
-                    timerSection
-                    if !todaySessions.isEmpty {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(spacing: 32) {
+                        timerSection
                         historySection
+                            .id("history")
+                    }
+                    .padding()
+                }
+                .scrollDismissesKeyboard(.interactively)
+                .navigationTitle("Work Timer")
+                .navigationBarTitleDisplayMode(.large)
+                .toolbar {
+                    ToolbarItemGroup(placement: .keyboard) {
+                        Spacer()
+                        Button("Done") { isTextFieldFocused = false }
                     }
                 }
-                .padding()
-            }
-            // Dismiss keyboard when tapping outside the text field.
-            .scrollDismissesKeyboard(.interactively)
-            .navigationTitle("Work Timer")
-            .navigationBarTitleDisplayMode(.large)
-            .toolbar {
-                // Explicit keyboard dismiss button for iPad where the
-                // software keyboard lacks a built-in dismiss key.
-                ToolbarItemGroup(placement: .keyboard) {
-                    Spacer()
-                    Button("Done") { isTextFieldFocused = false }
+                .onChange(of: vm.didAutoComplete) { _, didComplete in
+                    guard didComplete else { return }
+                    vm.didAutoComplete = false
+                    saveAutoCompletedSession()
+                    withAnimation {
+                        proxy.scrollTo("history", anchor: .top)
+                    }
                 }
-            }
-            .onChange(of: vm.didAutoComplete) { _, didComplete in
-                guard didComplete else { return }
-                vm.didAutoComplete = false
-                // Timer reached zero — save the session automatically.
-                saveAutoCompletedSession()
             }
         }
     }
@@ -56,11 +60,13 @@ struct ContentView: View {
 
     private var timerSection: some View {
         VStack(spacing: 24) {
-            // Task label input — only editable while idle.
-            TextField("What are you working on?", text: $vm.taskLabel)
+            // Task label — local @State avoids binding issues with
+            // external keyboards that go through @MainActor @Observable.
+            TextField("What are you working on?", text: $taskText)
                 .font(.title3)
                 .multilineTextAlignment(.center)
                 .textInputAutocapitalization(.sentences)
+                .autocorrectionDisabled(false)
                 .submitLabel(.done)
                 .focused($isTextFieldFocused)
                 .disabled(vm.state != .idle)
@@ -74,11 +80,9 @@ struct ContentView: View {
 
             // Circular progress ring + time display.
             ZStack {
-                // Background track.
                 Circle()
                     .stroke(Color.secondary.opacity(0.15), lineWidth: 12)
 
-                // Progress arc — animates smoothly on every tick.
                 Circle()
                     .trim(from: 0, to: vm.progress)
                     .stroke(
@@ -105,7 +109,6 @@ struct ContentView: View {
             }
             .frame(width: 240, height: 240)
 
-            // Completed banner
             if showCompletedBanner {
                 Label("Session saved!", systemImage: "checkmark.seal.fill")
                     .foregroundStyle(.green)
@@ -113,7 +116,6 @@ struct ContentView: View {
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
 
-            // Action buttons.
             controlButtons
         }
         .padding()
@@ -186,10 +188,7 @@ struct ContentView: View {
             }
 
         case .completed:
-            Button(action: {
-                vm.reset()
-                vm.taskLabel = ""
-            }) {
+            Button(action: resetToIdle) {
                 Label("New Session", systemImage: "arrow.clockwise")
                     .frame(maxWidth: .infinity)
             }
@@ -198,26 +197,40 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - History section
+    // MARK: - History section (always visible)
 
     private var historySection: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("Today")
+                Label("Today", systemImage: "clock.arrow.trianglehead.counterclockwise.rotate.90")
                     .font(.headline)
                 Spacer()
-                Text(totalDurationToday)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                if !todaySessions.isEmpty {
+                    Text(totalDurationToday)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
             }
             .padding(.horizontal, 4)
 
-            ForEach(todaySessions) { session in
-                SessionRow(session: session) {
-                    modelContext.delete(session)
+            if todaySessions.isEmpty {
+                Text("Completed sessions will appear here.")
+                    .font(.subheadline)
+                    .foregroundStyle(.tertiary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 24)
+            } else {
+                ForEach(todaySessions) { session in
+                    SessionRow(session: session) {
+                        withAnimation {
+                            modelContext.delete(session)
+                        }
+                    }
                 }
             }
         }
+        .padding()
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
     }
 
     // MARK: - Helpers
@@ -255,22 +268,19 @@ struct ContentView: View {
         persistSession(elapsed: elapsed)
     }
 
-    // Called when the timer reaches zero on its own — vm.complete() was
-    // already called by the ViewModel, so we just need the elapsed time.
     private func saveAutoCompletedSession() {
         persistSession(elapsed: vm.selectedMinutes * 60)
     }
 
     private func persistSession(elapsed: Int) {
         guard elapsed > 0 else { return }
-        let label = vm.taskLabel.trimmingCharacters(in: .whitespaces)
+        let label = taskText.trimmingCharacters(in: .whitespaces)
         let session = WorkSession(
             taskLabel: label.isEmpty ? "Untitled" : label,
             durationSeconds: elapsed
         )
         modelContext.insert(session)
 
-        // Cancel any previous banner dismissal to avoid race conditions.
         bannerTask?.cancel()
         withAnimation {
             showCompletedBanner = true
@@ -279,9 +289,13 @@ struct ContentView: View {
             try? await Task.sleep(for: .seconds(2))
             guard !Task.isCancelled else { return }
             withAnimation { showCompletedBanner = false }
-            vm.reset()
-            vm.taskLabel = ""
+            resetToIdle()
         }
+    }
+
+    private func resetToIdle() {
+        vm.reset()
+        taskText = ""
     }
 }
 

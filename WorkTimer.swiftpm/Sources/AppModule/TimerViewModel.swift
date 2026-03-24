@@ -17,7 +17,6 @@ final class TimerViewModel {
 
     // MARK: - User-configurable inputs
 
-    var taskLabel: String = ""
     /// Duration chosen before starting, in minutes.
     var selectedMinutes: Int = 25
 
